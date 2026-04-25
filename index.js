@@ -1,20 +1,75 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const qrcode = require('qrcode');
+const express = require('express');
 
-const client = new Client({
-    authStrategy: new LocalAuth()
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+let ultimoQR = null;
+let botStatus = 'desconectado';
+
+// Página web para mostrar o QR Code
+app.get('/', (req, res) => {
+    if (botStatus === 'conectado') {
+        res.send(`
+            <html>
+            <body style="font-family: Arial; text-align: center; padding: 50px; background: #f0f0f0;">
+                <h1 style="color: green;">✅ Vítor está online!</h1>
+                <p>O bot está conectado e funcionando normalmente.</p>
+            </body>
+            </html>
+        `);
+    } else if (ultimoQR) {
+        res.send(`
+            <html>
+            <body style="font-family: Arial; text-align: center; padding: 50px; background: #f0f0f0;">
+                <h1>📱 Escaneie o QR Code</h1>
+                <p>Abra o WhatsApp > Aparelhos conectados > Conectar aparelho</p>
+                <img src="${ultimoQR}" style="width: 300px; height: 300px;"/>
+                <p><small>Atualize a página se o QR Code expirar</small></p>
+            </body>
+            </html>
+        `);
+    } else {
+        res.send(`
+            <html>
+            <body style="font-family: Arial; text-align: center; padding: 50px; background: #f0f0f0;">
+                <h1>⏳ Aguarde...</h1>
+                <p>O bot está iniciando. Atualize a página em alguns segundos.</p>
+            </body>
+            </html>
+        `);
+    }
 });
 
-// Aqui vamos guardar em que etapa cada pessoa está
+app.listen(PORT, () => {
+    console.log(`🌐 Servidor rodando na porta ${PORT}`);
+});
+
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }
+});
+
 const sessoes = {};
 
-client.on('qr', (qr) => {
-    console.log('📱 Escaneie o QR Code abaixo com seu WhatsApp:');
-    qrcode.generate(qr, { small: true });
+client.on('qr', async (qr) => {
+    console.log('📱 Novo QR Code gerado!');
+    ultimoQR = await qrcode.toDataURL(qr);
+    botStatus = 'desconectado';
 });
 
 client.on('ready', () => {
     console.log('✅ Vítor está online e pronto para atender!');
+    ultimoQR = null;
+    botStatus = 'conectado';
+});
+
+client.on('disconnected', () => {
+    console.log('❌ Bot desconectado!');
+    botStatus = 'desconectado';
 });
 
 client.on('message', async (msg) => {
@@ -23,7 +78,6 @@ client.on('message', async (msg) => {
     const texto = msg.body.trim();
     const telefone = msg.from;
 
-    // Se é a primeira mensagem da pessoa
     if (!sessoes[telefone]) {
         sessoes[telefone] = { etapa: 'menu' };
         await msg.reply(`Olá, ${nome}! 👋\nMeu nome é Vítor, sou o assistente virtual do Dr. João.\n\nComo posso te ajudar hoje?\n\n1. Agendar nova consulta\n2. Reagendar uma consulta\n3. Receber o link da consulta\n4. Solicitar nota fiscal\n5. Sou um novo paciente\n6. Outros assuntos`);
@@ -32,7 +86,6 @@ client.on('message', async (msg) => {
 
     const etapa = sessoes[telefone].etapa;
 
-    // Menu principal
     if (etapa === 'menu') {
         if (texto === '1') {
             sessoes[telefone].etapa = 'aguardando_dados_agendamento';
@@ -58,7 +111,6 @@ client.on('message', async (msg) => {
         return;
     }
 
-    // Opção 5 e 6 — Novo paciente / Outros
     if (etapa === 'novo_paciente' || etapa === 'outros') {
         if (texto === '1') {
             sessoes[telefone].etapa = 'aguardando_dados_agendamento';
@@ -75,7 +127,6 @@ client.on('message', async (msg) => {
         return;
     }
 
-    // Coleta de dados — apenas confirma recebimento
     if (['aguardando_dados_agendamento', 'aguardando_dados_reagendamento', 'aguardando_comprovante', 'aguardando_dados_nf'].includes(etapa)) {
         sessoes[telefone].etapa = 'menu';
         await msg.reply('✅ Informações recebidas! O Dr. João entrará em contato em breve para confirmar.\n\nPosso ajudar com mais alguma coisa?\n\n1. Agendar nova consulta\n2. Reagendar uma consulta\n3. Receber o link da consulta\n4. Solicitar nota fiscal\n5. Sou um novo paciente\n6. Outros assuntos');
